@@ -18,9 +18,18 @@ void llama_model_hrm_text::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_hrm_h_cycles > 0);
     GGML_ASSERT(hparams.n_hrm_l_cycles > 0);
 
+    // block_count is capped at LLAMA_MAX_LAYERS, so these factors cannot exceed it
+    // wrapping the product would alias slots outside the layer vector
+    if (hparams.n_hrm_layers_per_stack > LLAMA_MAX_LAYERS || hparams.n_hrm_h_cycles > LLAMA_MAX_LAYERS
+            || (uint64_t) hparams.n_hrm_l_cycles + 1 > LLAMA_MAX_LAYERS) {
+        throw std::runtime_error("hrm-text: layers_per_stack, h_cycles or l_cycles is too large");
+    }
+
     // the GGUF block count is the expanded cache-slot count
     const uint32_t n_slot = hparams.n_hrm_layers_per_stack * hparams.n_hrm_h_cycles * (hparams.n_hrm_l_cycles + 1);
-    GGML_ASSERT(hparams.n_layer() == n_slot);
+    if (n_slot != hparams.n_layer()) {
+        throw std::runtime_error("hrm-text: layers_per_stack * h_cycles * (l_cycles + 1) does not match block_count");
+    }
 
     switch (hparams.n_embd) {
         case 1536:

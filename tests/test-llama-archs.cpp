@@ -844,6 +844,32 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
+// a crafted file can wrap the uint32 slot-count product into the block count
+static bool check_hrm_text_slot_count(const size_t seed, const float stdev) {
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_HRM_TEXT, false);
+    kv_writer ms(LLM_ARCH_HRM_TEXT, gguf_ctx.get());
+
+    // 4 * 1 * (2^30 + 1) is 2^32 + 4, equal to the block count only through the wrap
+    ms.add_kv(LLM_KV_HRM_LAYERS_PER_STACK, uint32_t(4));
+    ms.add_kv(LLM_KV_HRM_H_CYCLES,         uint32_t(1));
+    ms.add_kv(LLM_KV_HRM_L_CYCLES,         uint32_t(1u << 30));
+    ms.add_kv(LLM_KV_BLOCK_COUNT,          uint32_t(4));
+
+    tensor_data_params tensor_params = { seed, stdev };
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers      = 0;
+    model_params.progress_callback = silent_model_load_progress;
+
+    llama_model * model = llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tensor_params, model_params);
+    if (model != nullptr) {
+        llama_model_free(model);
+        return false;
+    }
+
+    return true;
+}
+
 static std::string get_tmp_gguf_path() {
     static size_t id = 0;
     return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
@@ -1913,6 +1939,11 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
 
     init_normal_pool(seed, stdev);
+
+    if (arch_matches(arch_filter, LLM_ARCH_HRM_TEXT) && !check_hrm_text_slot_count(seed, stdev)) {
+        LOG_ERR("%s: hrm-text: slot count overflow was not rejected\n", __func__);
+        return 1;
+    }
 
     try {
         if (!out.empty()) {
